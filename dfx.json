@@ -1,0 +1,27 @@
+{
+  "canisters": {
+    "PromptVault_backend": {
+      "candid": "src/PromptVault_backend/PromptVault_backend.did",
+      "package": "PromptVault_backend",
+      "type": "rust"
+    },
+    "PromptVault_frontend": {
+      "dependencies": [
+        "PromptVault_backend"
+      ],
+      "source": [
+        "src/PromptVault_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "PromptVault_frontend"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
