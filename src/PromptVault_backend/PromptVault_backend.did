@@ -1,3 +1,124 @@
+type PromptCategory = variant {
+  Marketing;
+  Development;
+  Writing;
+  Business;
+  Education;
+  Creative;
+  Other;
+};
+
+type Prompt = record {
+  id: nat64;
+  title: text;
+  description: text;
+  content: text;
+  author: principal;
+  category: PromptCategory;
+  tags: vec text;
+  price: nat64;
+  is_premium: bool;
+  is_public: bool;
+  created_at: nat64;
+  updated_at: nat64;
+  likes: nat64;
+  purchases: nat64;
+  rating: float64;
+  total_ratings: nat64;
+};
+
+type CreatePromptRequest = record {
+  title: text;
+  description: text;
+  content: text;
+  category: PromptCategory;
+  tags: vec text;
+  price: nat64;
+  is_premium: bool;
+  is_public: bool;
+};
+
+type UpdatePromptRequest = record {
+  id: nat64;
+  title: opt text;
+  description: opt text;
+  content: opt text;
+  category: opt PromptCategory;
+  tags: opt vec text;
+  price: opt nat64;
+  is_premium: opt bool;
+  is_public: opt bool;
+};
+
+type User = record {
+  id: principal;
+  username: opt text;
+  email: opt text;
+  joined_at: nat64;
+  total_earnings: nat64;
+  total_spent: nat64;
+  prompts_created: nat64;
+  prompts_purchased: nat64;
+};
+
+type Purchase = record {
+  prompt_id: nat64;
+  buyer: principal;
+  seller: principal;
+  price: nat64;
+  timestamp: nat64;
+};
+
+type ApiResponse_User = record {
+  success: bool;
+  data: opt User;
+  error: opt text;
+};
+
+type ApiResponse_Prompt = record {
+  success: bool;
+  data: opt Prompt;
+  error: opt text;
+};
+
+type ApiResponse_Prompts = record {
+  success: bool;
+  data: opt vec Prompt;
+  error: opt text;
+};
+
+type ApiResponse_String = record {
+  success: bool;
+  data: opt text;
+  error: opt text;
+};
+
+type ApiResponse_PromptIds = record {
+  success: bool;
+  data: opt vec nat64;
+  error: opt text;
+};
+
 service : {
-    "greet": (text) -> (text) query;
+  // User management
+  create_user: (opt text, opt text) -> (ApiResponse_User);
+  get_user: (principal) -> (ApiResponse_User) query;
+  
+  // Prompt management
+  create_prompt: (CreatePromptRequest) -> (ApiResponse_Prompt);
+  get_prompt: (nat64) -> (ApiResponse_Prompt) query;
+  get_public_prompts: () -> (ApiResponse_Prompts) query;
+  get_user_prompts: (principal) -> (ApiResponse_Prompts) query;
+  update_prompt: (UpdatePromptRequest) -> (ApiResponse_Prompt);
+  get_prompt_content: (nat64) -> (ApiResponse_String) query;
+  
+  // Marketplace
+  purchase_prompt: (nat64) -> (ApiResponse_String);
+  get_user_purchases: (principal) -> (ApiResponse_PromptIds) query;
+  
+  // Social features
+  like_prompt: (nat64) -> (ApiResponse_String);
+  
+  // Search
+  search_prompts: (text, opt PromptCategory) -> (ApiResponse_Prompts) query;
 }
