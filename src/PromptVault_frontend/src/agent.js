@@ -1,86 +1,16 @@
-// agent.js - ICP Agent setup and canister interface
-import { Actor, HttpAgent } from '@dfinity/agent';
-import { AuthClient } from '@dfinity/auth-client';
+// src/agent.js - ICP Agent setup
+import { Actor, HttpAgent } from "@dfinity/agent";
+import { AuthClient } from "@dfinity/auth-client";
+import {
+  createActor,
+  canisterId as backendCanisterId,
+} from "../../declarations/PromptVault_backend";
 
-// Canister ID for local replica (replace with your actual canister ID)
-const CANISTER_ID = process.env.REACT_APP_CANISTER_ID;
-
-// Local replica configuration
-const LOCAL_REPLICA_URL = 'http://127.0.0.1:4943';
-
-// IDL (Interface Description Language) for your canister
-const idlFactory = ({ IDL }) => {
-  const PromptCategory = IDL.Variant({
-    'Marketing': IDL.Null,
-    'Development': IDL.Null,
-    'Writing': IDL.Null,
-    'Business': IDL.Null,
-    'Education': IDL.Null,
-    'Creative': IDL.Null,
-    'Other': IDL.Null,
-  });
-
-  const CreatePromptRequest = IDL.Record({
-    'title': IDL.Text,
-    'description': IDL.Text,
-    'content': IDL.Text,
-    'category': PromptCategory,
-    'tags': IDL.Vec(IDL.Text),
-    'price': IDL.Nat64,
-    'is_premium': IDL.Bool,
-    'is_public': IDL.Bool,
-  });
-
-  const Prompt = IDL.Record({
-    'id': IDL.Nat64,
-    'title': IDL.Text,
-    'description': IDL.Text,
-    'content': IDL.Text,
-    'author': IDL.Principal,
-    'category': PromptCategory,
-    'tags': IDL.Vec(IDL.Text),
-    'price': IDL.Nat64,
-    'is_premium': IDL.Bool,
-    'is_public': IDL.Bool,
-    'created_at': IDL.Nat64,
-    'updated_at': IDL.Nat64,
-    'likes': IDL.Nat64,
-    'purchases': IDL.Nat64,
-    'rating': IDL.Float64,
-    'total_ratings': IDL.Nat64,
-  });
-
-  const User = IDL.Record({
-    'id': IDL.Principal,
-    'username': IDL.Opt(IDL.Text),
-    'email': IDL.Opt(IDL.Text),
-    'joined_at': IDL.Nat64,
-    'total_earnings': IDL.Nat64,
-    'total_spent': IDL.Nat64,
-    'prompts_created': IDL.Nat64,
-    'prompts_purchased': IDL.Nat64,
-  });
-
-  const ApiResponse = (T) => IDL.Record({
-    'success': IDL.Bool,
-    'data': IDL.Opt(T),
-    'error': IDL.Opt(IDL.Text),
-  });
-
-  return IDL.Service({
-    'create_user': IDL.Func([IDL.Opt(IDL.Text), IDL.Opt(IDL.Text)], [ApiResponse(User)], []),
-    'get_user': IDL.Func([IDL.Principal], [ApiResponse(User)], ['query']),
-    'create_prompt': IDL.Func([CreatePromptRequest], [ApiResponse(Prompt)], []),
-    'get_prompt': IDL.Func([IDL.Nat64], [ApiResponse(Prompt)], ['query']),
-    'get_public_prompts': IDL.Func([], [ApiResponse(IDL.Vec(Prompt))], ['query']),
-    'get_user_prompts': IDL.Func([IDL.Principal], [ApiResponse(IDL.Vec(Prompt))], ['query']),
-    'purchase_prompt': IDL.Func([IDL.Nat64], [ApiResponse(IDL.Text)], []),
-    'get_prompt_content': IDL.Func([IDL.Nat64], [ApiResponse(IDL.Text)], ['query']),
-    'like_prompt': IDL.Func([IDL.Nat64], [ApiResponse(IDL.Text)], []),
-    'get_user_purchases': IDL.Func([IDL.Principal], [ApiResponse(IDL.Vec(IDL.Nat64))], ['query']),
-    'search_prompts': IDL.Func([IDL.Text, IDL.Opt(PromptCategory)], [ApiResponse(IDL.Vec(Prompt))], ['query']),
-  });
-};
+// Pull values from Vite's environment variables
+const CANISTER_ID = import.meta.env.VITE_CANISTER_ID;
+const INTERNET_IDENTITY_CANISTER_ID = import.meta.env
+  .VITE_INTERNET_IDENTITY_CANISTER_ID;
+const LOCAL_REPLICA_URL = "http://127.0.0.1:4943";
 
 class ICPAgent {
   constructor() {
@@ -93,65 +23,72 @@ class ICPAgent {
 
   async init() {
     try {
-      // Initialize auth client
       this.authClient = await AuthClient.create();
       this.isAuthenticated = await this.authClient.isAuthenticated();
+      this.identity = this.authClient.getIdentity();
 
-      // Create agent
-      this.agent = new HttpAgent({ 
+      this.agent = new HttpAgent({
         host: LOCAL_REPLICA_URL,
-        identity: this.isAuthenticated ? this.authClient.getIdentity() : undefined
+        identity: this.isAuthenticated ? this.identity : undefined,
       });
 
-      // Fetch root key for local replica (NEVER do this in production)
-      if (process.env.NODE_ENV !== 'production') {
-        await this.agent.fetchRootKey();
+      if (import.meta.env.MODE !== "production") {
+        await this.agent.fetchRootKey(); // Local only
       }
 
-      // Create actor
-      this.actor = Actor.createActor(idlFactory, {
-        agent: this.agent,
-        canisterId: CANISTER_ID,
-      });
+      this.actor = createActor(CANISTER_ID, { agent: this.agent });
 
-      console.log('ICP Agent initialized successfully');
+      console.log("ICP Agent initialized");
       return true;
     } catch (error) {
-      console.error('Failed to initialize ICP Agent:', error);
+      console.error("ICP Agent init failed:", error);
       return false;
     }
   }
 
   async login() {
     try {
-      await this.authClient.login({
-        identityProvider: process.env.NODE_ENV === 'production' 
-          ? '"https://icp0.io"' 
-          : `http://127.0.0.1:4943/?canisterId=${process.env.REACT_APP_INTERNET_IDENTITY_CANISTER_ID}`,
-        onSuccess: async () => {
-          this.isAuthenticated = true;
-          this.identity = this.authClient.getIdentity();
-          
-          // Reinitialize agent with new identity
-          this.agent = new HttpAgent({ 
-            host: LOCAL_REPLICA_URL,
-            identity: this.identity
-          });
-          
-          if (process.env.NODE_ENV !== 'production') {
-            await this.agent.fetchRootKey();
-          }
+      return new Promise((resolve, reject) => {
+        this.authClient.login({
+          identityProvider:
+            import.meta.env.MODE === "production"
+              ? "https://identity.ic0.app"
+              : `http://${
+                  import.meta.env.VITE_INTERNET_IDENTITY_CANISTER_ID
+                }.localhost:4943`,
+          onSuccess: async () => {
+            try {
+              this.isAuthenticated = true;
+              this.identity = this.authClient.getIdentity();
 
-          this.actor = Actor.createActor(idlFactory, {
-            agent: this.agent,
-            canisterId: CANISTER_ID,
-          });
+              this.agent = new HttpAgent({
+                host: LOCAL_REPLICA_URL,
+                identity: this.identity,
+              });
 
-          console.log('Logged in successfully');
-        },
+              if (import.meta.env.MODE !== "production") {
+                await this.agent.fetchRootKey();
+              }
+
+              this.actor = createActor(backendCanisterId, {
+                agent: this.agent,
+              });
+
+              console.log("✅ Logged in successfully");
+              resolve(true);
+            } catch (e) {
+              console.error("Login post-setup failed:", e);
+              reject(e);
+            }
+          },
+          onError: (err) => {
+            console.error("❌ Login popup failed:", err);
+            reject(err);
+          },
+        });
       });
     } catch (error) {
-      console.error('Login failed:', error);
+      console.error("Login failed:", error);
       throw error;
     }
   }
@@ -160,81 +97,122 @@ class ICPAgent {
     await this.authClient.logout();
     this.isAuthenticated = false;
     this.identity = null;
-    await this.init(); // Reinitialize with anonymous identity
+    await this.init(); // Go back to anonymous
   }
 
   getPrincipal() {
     return this.identity?.getPrincipal()?.toString() || null;
   }
 
-  // API methods matching your Rust canister
-  async createUser(username, email) {
-    if (!this.isAuthenticated) throw new Error('Authentication required');
-    return await this.actor.create_user(username ? [username] : [], email ? [email] : []);
-  }
+  // ---------- Canister API Wrappers ----------
 
-  async getUser(userId) {
-    const principal = typeof userId === 'string' ? { _arr: [], _isPrincipal: true } : userId;
-    return await this.actor.get_user(principal);
+  async createUser(username, email) {
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.create_user(
+      username ? [username] : [],
+      email ? [email] : []
+    );
   }
 
   async getCurrentUser() {
-    if (!this.isAuthenticated) return { success: false, error: 'Not authenticated' };
-    return await this.actor.get_user(this.identity.getPrincipal());
+    if (!this.isAuthenticated)
+      return { success: false, error: "Not authenticated" };
+    return this.actor.get_user(this.identity.getPrincipal());
   }
 
-  async createPrompt(promptData) {
-    if (!this.isAuthenticated) throw new Error('Authentication required');
-    
+  async getUser(userId) {
+    return this.actor.get_user(userId);
+  }
+
+  async createPrompt(data) {
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+
     const request = {
-      title: promptData.title,
-      description: promptData.description,
-      content: promptData.content,
-      category: { [promptData.category]: null },
-      tags: promptData.tags,
-      price: BigInt(promptData.price),
-      is_premium: promptData.is_premium,
-      is_public: promptData.is_public,
+      title: data.title,
+      description: data.description,
+      content: data.content,
+      category: { [data.category]: null },
+      tags: data.tags,
+      price: BigInt(data.price),
+      is_premium: data.is_premium,
+      is_public: data.is_public,
     };
-    
-    return await this.actor.create_prompt(request);
+
+    return this.actor.create_prompt(request);
   }
 
   async getPublicPrompts() {
-    return await this.actor.get_public_prompts();
+    return this.actor.get_public_prompts();
   }
 
   async searchPrompts(query, category) {
     const categoryVariant = category ? { [category]: null } : [];
-    return await this.actor.search_prompts(query, categoryVariant);
+    return this.actor.search_prompts(query, categoryVariant);
   }
 
   async purchasePrompt(promptId) {
-    if (!this.isAuthenticated) throw new Error('Authentication required');
-    return await this.actor.purchase_prompt(BigInt(promptId));
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.purchase_prompt(BigInt(promptId));
   }
 
   async likePrompt(promptId) {
-    if (!this.isAuthenticated) throw new Error('Authentication required');
-    return await this.actor.like_prompt(BigInt(promptId));
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.like_prompt(BigInt(promptId));
   }
 
   async getUserPurchases(userId) {
     const principal = userId || this.identity.getPrincipal();
-    return await this.actor.get_user_purchases(principal);
+    return this.actor.get_user_purchases(principal);
   }
 
   async getUserPrompts(userId) {
     const principal = userId || this.identity.getPrincipal();
-    return await this.actor.get_user_prompts(principal);
+    return this.actor.get_user_prompts(principal);
   }
 
   async getPromptContent(promptId) {
-    return await this.actor.get_prompt_content(BigInt(promptId));
+    return this.actor.get_prompt_content(BigInt(promptId));
+  }
+
+  async updateUsername(newUsername) {
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.update_username(newUsername);
+  }
+
+  async updatePrompt(request) {
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.update_prompt(request);
+  }
+
+  async deletePrompt(promptId) {
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.delete_prompt(BigInt(promptId));
+  }
+
+  async unlikePrompt(promptId) {
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.unlike_prompt(BigInt(promptId));
+  }
+
+  async ratePrompt(request) {
+    if (!this.isAuthenticated) throw new Error("Authentication required");
+    return this.actor.rate_prompt(request);
+  }
+
+  async getPrompt(promptId) {
+    return this.actor.get_prompt(BigInt(promptId));
+  }
+
+  async getUserBalance(userId) {
+    const principal = userId || this.identity.getPrincipal();
+    return this.actor.get_user_balance(principal);
+  }
+
+  async getUserLedgerBalance(userId) {
+    const principal = userId || this.identity.getPrincipal();
+    return this.actor.get_user_ledger_balance(principal);
   }
 }
 
-// Create singleton instance
 const icpAgent = new ICPAgent();
-
 export default icpAgent;

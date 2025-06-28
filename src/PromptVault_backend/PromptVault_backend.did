@@ -50,6 +50,11 @@ type UpdatePromptRequest = record {
   is_public: opt bool;
 };
 
+type RatePromptRequest = record {
+  prompt_id: nat64;
+  rating: nat8;
+};
+
 type User = record {
   id: principal;
   username: opt text;
@@ -59,6 +64,7 @@ type User = record {
   total_spent: nat64;
   prompts_created: nat64;
   prompts_purchased: nat64;
+  balance: nat64;
 };
 
 type Purchase = record {
@@ -99,10 +105,17 @@ type ApiResponse_PromptIds = record {
   error: opt text;
 };
 
+type ApiResponse_nat64 = record {
+  success: bool;
+  data: opt nat64;
+  error: opt text;
+};
+
 service : {
   // User management
   create_user: (opt text, opt text) -> (ApiResponse_User);
   get_user: (principal) -> (ApiResponse_User) query;
+  update_username: (text) -> (ApiResponse_User);
   
   // Prompt management
   create_prompt: (CreatePromptRequest) -> (ApiResponse_Prompt);
@@ -110,6 +123,7 @@ service : {
   get_public_prompts: () -> (ApiResponse_Prompts) query;
   get_user_prompts: (principal) -> (ApiResponse_Prompts) query;
   update_prompt: (UpdatePromptRequest) -> (ApiResponse_Prompt);
+  delete_prompt: (nat64) -> (ApiResponse_String);
   get_prompt_content: (nat64) -> (ApiResponse_String) query;
   
   // Marketplace
@@ -118,6 +132,12 @@ service : {
   
   // Social features
   like_prompt: (nat64) -> (ApiResponse_String);
+  unlike_prompt: (nat64) -> (ApiResponse_String);
+  rate_prompt: (RatePromptRequest) -> (ApiResponse_String);
+  
+  // Balance
+  get_user_balance: (principal) -> (ApiResponse_nat64) query;
+  get_user_ledger_balance: (principal) -> (ApiResponse_nat64);
   
   // Search
   search_prompts: (text, opt PromptCategory) -> (ApiResponse_Prompts) query;

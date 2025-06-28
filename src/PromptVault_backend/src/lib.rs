@@ -1,11 +1,23 @@
 use candid::{CandidType, Principal};
 use ic_cdk::api::time;
+use ic_cdk::query;
+use ic_cdk::update;
 use ic_cdk_macros::*;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use ic_cdk::query;
-use ic_cdk::update;
 use std::collections::HashMap;
+
+// Add ledger types
+#[derive(CandidType, Deserialize)]
+struct AccountBalance {
+    e8s: u64,
+}
+
+#[derive(CandidType, Deserialize)]
+struct Account {
+    owner: Principal,
+    subaccount: Option<Vec<u8>>,
+}
 
 // Constants
 const MAX_TITLE_LENGTH: usize = 100;
@@ -99,6 +111,7 @@ pub struct User {
     pub total_spent: u64,
     pub prompts_created: u64,
     pub prompts_purchased: u64,
+    pub balance: u64, // in e8s (1 ICP = 100_000_000 e8s)
 }
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
@@ -153,16 +166,25 @@ fn validate_prompt_input(request: &CreatePromptRequest) -> Result<(), String> {
         return Err("Title cannot be empty".to_string());
     }
     if request.title.len() > MAX_TITLE_LENGTH {
-        return Err(format!("Title cannot exceed {} characters", MAX_TITLE_LENGTH));
+        return Err(format!(
+            "Title cannot exceed {} characters",
+            MAX_TITLE_LENGTH
+        ));
     }
     if request.description.len() > MAX_DESCRIPTION_LENGTH {
-        return Err(format!("Description cannot exceed {} characters", MAX_DESCRIPTION_LENGTH));
+        return Err(format!(
+            "Description cannot exceed {} characters",
+            MAX_DESCRIPTION_LENGTH
+        ));
     }
     if request.content.trim().is_empty() {
         return Err("Content cannot be empty".to_string());
     }
     if request.content.len() > MAX_CONTENT_LENGTH {
-        return Err(format!("Content cannot exceed {} characters", MAX_CONTENT_LENGTH));
+        return Err(format!(
+            "Content cannot exceed {} characters",
+            MAX_CONTENT_LENGTH
+        ));
     }
     if request.tags.len() > MAX_TAGS {
         return Err(format!("Cannot have more than {} tags", MAX_TAGS));
@@ -204,13 +226,13 @@ fn init() {
 #[update]
 fn create_user(username: Option<String>, email: Option<String>) -> ApiResponse<User> {
     let caller = get_caller();
-    
+
     // Check if user already exists
     let user_exists = USERS.with(|u| {
         let users = u.borrow();
         users.contains_key(&caller)
     });
-    
+
     if user_exists {
         return ApiResponse {
             success: false,
@@ -218,7 +240,7 @@ fn create_user(username: Option<String>, email: Option<String>) -> ApiResponse<U
             error: Some("User already exists".to_string()),
         };
     }
-    
+
     // Validate username if provided
     if let Some(ref name) = username {
         if name.trim().is_empty() || name.len() > 50 {
@@ -229,7 +251,7 @@ fn create_user(username: Option<String>, email: Option<String>) -> ApiResponse<U
             };
         }
     }
-    
+
     let user = User {
         id: caller,
         username,
@@ -239,13 +261,14 @@ fn create_user(username: Option<String>, email: Option<String>) -> ApiResponse<U
         total_spent: 0,
         prompts_created: 0,
         prompts_purchased: 0,
+        balance: 0,
     };
-    
+
     USERS.with(|u| {
         let mut users = u.borrow_mut();
         users.insert(caller, user.clone());
     });
-    
+
     ApiResponse {
         success: true,
         data: Some(user),
@@ -254,7 +277,7 @@ fn create_user(username: Option<String>, email: Option<String>) -> ApiResponse<U
 }
 
 #[ic_cdk::query]
-fn get_user(user_id: Principal) -> ApiResponse<User> {
+fn get_user(user_id: UserId) -> ApiResponse<User> {
     USERS.with(|u| {
         let users = u.borrow();
         match users.get(&user_id) {
@@ -272,11 +295,10 @@ fn get_user(user_id: Principal) -> ApiResponse<User> {
     })
 }
 
-
 #[ic_cdk::update]
 fn create_prompt(request: CreatePromptRequest) -> ApiResponse<Prompt> {
     let caller = get_caller();
-    
+
     // Validate input
     if let Err(error) = validate_prompt_input(&request) {
         return ApiResponse {
@@ -285,13 +307,13 @@ fn create_prompt(request: CreatePromptRequest) -> ApiResponse<Prompt> {
             error: Some(error),
         };
     }
-    
+
     // Ensure user exists
     let user_exists = USERS.with(|u| {
         let users = u.borrow();
         users.contains_key(&caller)
     });
-    
+
     if !user_exists {
         return ApiResponse {
             success: false,
@@ -299,14 +321,14 @@ fn create_prompt(request: CreatePromptRequest) -> ApiResponse<Prompt> {
             error: Some("User not found. Please create a user first.".to_string()),
         };
     }
-    
+
     let prompt_id = NEXT_PROMPT_ID.with(|id| {
         let mut next_id = id.borrow_mut();
         let current_id = *next_id;
         *next_id += 1;
         current_id
     });
-    
+
     let now = get_time();
     let prompt = Prompt {
         id: prompt_id,
@@ -326,12 +348,12 @@ fn create_prompt(request: CreatePromptRequest) -> ApiResponse<Prompt> {
         rating: 0.0,
         total_ratings: 0,
     };
-    
+
     PROMPTS.with(|p| {
         let mut prompts = p.borrow_mut();
         prompts.insert(prompt_id, prompt.clone());
     });
-    
+
     // Update user stats
     USERS.with(|u| {
         let mut users = u.borrow_mut();
@@ -339,7 +361,7 @@ fn create_prompt(request: CreatePromptRequest) -> ApiResponse<Prompt> {
             user.prompts_created += 1;
         }
     });
-    
+
     ApiResponse {
         success: true,
         data: Some(prompt),
@@ -375,7 +397,7 @@ fn get_public_prompts() -> ApiResponse<Vec<Prompt>> {
             .filter(|prompt| prompt.is_public)
             .cloned()
             .collect();
-        
+
         ApiResponse {
             success: true,
             data: Some(public_prompts),
@@ -393,7 +415,7 @@ fn get_user_prompts(user_id: UserId) -> ApiResponse<Vec<Prompt>> {
             .filter(|prompt| prompt.author == user_id)
             .cloned()
             .collect();
-        
+
         ApiResponse {
             success: true,
             data: Some(user_prompts),
@@ -405,7 +427,7 @@ fn get_user_prompts(user_id: UserId) -> ApiResponse<Vec<Prompt>> {
 #[ic_cdk::update]
 fn update_prompt(request: UpdatePromptRequest) -> ApiResponse<Prompt> {
     let caller = get_caller();
-    
+
     if !is_authorized(request.id, caller) {
         return ApiResponse {
             success: false,
@@ -413,7 +435,7 @@ fn update_prompt(request: UpdatePromptRequest) -> ApiResponse<Prompt> {
             error: Some("Unauthorized".to_string()),
         };
     }
-    
+
     PROMPTS.with(|p| {
         let mut prompts = p.borrow_mut();
         match prompts.get_mut(&request.id) {
@@ -471,7 +493,7 @@ fn update_prompt(request: UpdatePromptRequest) -> ApiResponse<Prompt> {
                     prompt.is_public = is_public;
                 }
                 prompt.updated_at = get_time();
-                
+
                 ApiResponse {
                     success: true,
                     data: Some(prompt.clone()),
@@ -490,7 +512,7 @@ fn update_prompt(request: UpdatePromptRequest) -> ApiResponse<Prompt> {
 #[ic_cdk::update]
 fn delete_prompt(prompt_id: PromptId) -> ApiResponse<String> {
     let caller = get_caller();
-    
+
     if !is_authorized(prompt_id, caller) {
         return ApiResponse {
             success: false,
@@ -498,12 +520,12 @@ fn delete_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             error: Some("Unauthorized".to_string()),
         };
     }
-    
+
     let removed = PROMPTS.with(|p| {
         let mut prompts = p.borrow_mut();
         prompts.remove(&prompt_id).is_some()
     });
-    
+
     if removed {
         // Update user stats
         USERS.with(|u| {
@@ -514,7 +536,7 @@ fn delete_prompt(prompt_id: PromptId) -> ApiResponse<String> {
                 }
             }
         });
-        
+
         ApiResponse {
             success: true,
             data: Some("Prompt deleted successfully".to_string()),
@@ -532,22 +554,24 @@ fn delete_prompt(prompt_id: PromptId) -> ApiResponse<String> {
 #[ic_cdk::update]
 fn purchase_prompt(prompt_id: PromptId) -> ApiResponse<String> {
     let caller = get_caller();
-    
+
     // Check if prompt exists
     let prompt_info = PROMPTS.with(|p| {
         let prompts = p.borrow();
         prompts.get(&prompt_id).cloned()
     });
-    
+
     let prompt = match prompt_info {
         Some(p) => p,
-        None => return ApiResponse {
-            success: false,
-            data: None,
-            error: Some("Prompt not found".to_string()),
-        },
+        None => {
+            return ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Prompt not found".to_string()),
+            }
+        }
     };
-    
+
     // Check if user is trying to buy their own prompt
     if prompt.author == caller {
         return ApiResponse {
@@ -556,7 +580,7 @@ fn purchase_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             error: Some("Cannot purchase your own prompt".to_string()),
         };
     }
-    
+
     // Check if already purchased
     if has_purchased(caller, prompt_id) {
         return ApiResponse {
@@ -565,10 +589,10 @@ fn purchase_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             error: Some("Prompt already purchased".to_string()),
         };
     }
-    
+
     // For now, we'll simulate the payment process
     // In a real implementation, you'd integrate with ICP ledger
-    
+
     let purchase = Purchase {
         prompt_id,
         buyer: caller,
@@ -576,19 +600,22 @@ fn purchase_prompt(prompt_id: PromptId) -> ApiResponse<String> {
         price: prompt.price,
         timestamp: get_time(),
     };
-    
+
     // Record purchase
     PURCHASES.with(|p| {
         let mut purchases = p.borrow_mut();
         purchases.push(purchase);
     });
-    
+
     // Update user purchases
     USER_PURCHASES.with(|up| {
         let mut user_purchases = up.borrow_mut();
-        user_purchases.entry(caller).or_insert_with(Vec::new).push(prompt_id);
+        user_purchases
+            .entry(caller)
+            .or_insert_with(Vec::new)
+            .push(prompt_id);
     });
-    
+
     // Update prompt stats
     PROMPTS.with(|p| {
         let mut prompts = p.borrow_mut();
@@ -596,19 +623,25 @@ fn purchase_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             prompt.purchases += 1;
         }
     });
-    
+
     // Update user stats
     USERS.with(|u| {
         let mut users = u.borrow_mut();
         if let Some(buyer) = users.get_mut(&caller) {
             buyer.prompts_purchased += 1;
             buyer.total_spent += prompt.price;
+            if buyer.balance >= prompt.price {
+                buyer.balance -= prompt.price;
+            } else {
+                buyer.balance = 0;
+            }
         }
         if let Some(seller) = users.get_mut(&prompt.author) {
             seller.total_earnings += prompt.price;
+            seller.balance += prompt.price;
         }
     });
-    
+
     ApiResponse {
         success: true,
         data: Some("Purchase successful".to_string()),
@@ -619,12 +652,12 @@ fn purchase_prompt(prompt_id: PromptId) -> ApiResponse<String> {
 #[ic_cdk::query]
 fn get_prompt_content(prompt_id: PromptId) -> ApiResponse<String> {
     let caller = get_caller();
-    
+
     let prompt = PROMPTS.with(|p| {
         let prompts = p.borrow();
         prompts.get(&prompt_id).cloned()
     });
-    
+
     match prompt {
         Some(p) => {
             // Allow access if: prompt is public, user is author, or user has purchased
@@ -653,13 +686,13 @@ fn get_prompt_content(prompt_id: PromptId) -> ApiResponse<String> {
 #[ic_cdk::update]
 fn like_prompt(prompt_id: PromptId) -> ApiResponse<String> {
     let caller = get_caller();
-    
+
     // Check if prompt exists
     let prompt_exists = PROMPTS.with(|p| {
         let prompts = p.borrow();
         prompts.contains_key(&prompt_id)
     });
-    
+
     if !prompt_exists {
         return ApiResponse {
             success: false,
@@ -667,7 +700,7 @@ fn like_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             error: Some("Prompt not found".to_string()),
         };
     }
-    
+
     // Check if already liked
     let already_liked = USER_LIKES.with(|ul| {
         let user_likes = ul.borrow();
@@ -676,7 +709,7 @@ fn like_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             None => false,
         }
     });
-    
+
     if already_liked {
         return ApiResponse {
             success: false,
@@ -684,13 +717,16 @@ fn like_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             error: Some("Prompt already liked".to_string()),
         };
     }
-    
+
     // Add like
     USER_LIKES.with(|ul| {
         let mut user_likes = ul.borrow_mut();
-        user_likes.entry(caller).or_insert_with(Vec::new).push(prompt_id);
+        user_likes
+            .entry(caller)
+            .or_insert_with(Vec::new)
+            .push(prompt_id);
     });
-    
+
     // Update prompt likes count
     PROMPTS.with(|p| {
         let mut prompts = p.borrow_mut();
@@ -698,7 +734,7 @@ fn like_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             prompt.likes += 1;
         }
     });
-    
+
     ApiResponse {
         success: true,
         data: Some("Prompt liked successfully".to_string()),
@@ -709,13 +745,13 @@ fn like_prompt(prompt_id: PromptId) -> ApiResponse<String> {
 #[ic_cdk::update]
 fn unlike_prompt(prompt_id: PromptId) -> ApiResponse<String> {
     let caller = get_caller();
-    
+
     // Check if prompt exists
     let prompt_exists = PROMPTS.with(|p| {
         let prompts = p.borrow();
         prompts.contains_key(&prompt_id)
     });
-    
+
     if !prompt_exists {
         return ApiResponse {
             success: false,
@@ -723,7 +759,7 @@ fn unlike_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             error: Some("Prompt not found".to_string()),
         };
     }
-    
+
     // Check if actually liked
     let was_liked = USER_LIKES.with(|ul| {
         let mut user_likes = ul.borrow_mut();
@@ -739,7 +775,7 @@ fn unlike_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             None => false,
         }
     });
-    
+
     if !was_liked {
         return ApiResponse {
             success: false,
@@ -747,7 +783,7 @@ fn unlike_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             error: Some("Prompt was not liked".to_string()),
         };
     }
-    
+
     // Update prompt likes count
     PROMPTS.with(|p| {
         let mut prompts = p.borrow_mut();
@@ -757,7 +793,7 @@ fn unlike_prompt(prompt_id: PromptId) -> ApiResponse<String> {
             }
         }
     });
-    
+
     ApiResponse {
         success: true,
         data: Some("Prompt unliked successfully".to_string()),
@@ -768,7 +804,7 @@ fn unlike_prompt(prompt_id: PromptId) -> ApiResponse<String> {
 #[ic_cdk::update]
 fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
     let caller = get_caller();
-    
+
     // Validate rating
     if let Err(error) = validate_rating(request.rating) {
         return ApiResponse {
@@ -777,13 +813,13 @@ fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
             error: Some(error),
         };
     }
-    
+
     // Check if prompt exists
     let prompt_exists = PROMPTS.with(|p| {
         let prompts = p.borrow();
         prompts.contains_key(&request.prompt_id)
     });
-    
+
     if !prompt_exists {
         return ApiResponse {
             success: false,
@@ -791,7 +827,7 @@ fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
             error: Some("Prompt not found".to_string()),
         };
     }
-    
+
     // Check if user owns the prompt
     if is_authorized(request.prompt_id, caller) {
         return ApiResponse {
@@ -800,7 +836,7 @@ fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
             error: Some("Cannot rate your own prompt".to_string()),
         };
     }
-    
+
     // Check if user has purchased the prompt or it's public
     let can_rate = PROMPTS.with(|p| {
         let prompts = p.borrow();
@@ -810,7 +846,7 @@ fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
             false
         }
     });
-    
+
     if !can_rate {
         return ApiResponse {
             success: false,
@@ -818,7 +854,7 @@ fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
             error: Some("Must purchase prompt to rate it".to_string()),
         };
     }
-    
+
     // Record or update the rating
     let previous_rating = USER_RATINGS.with(|ur| {
         let mut user_ratings = ur.borrow_mut();
@@ -827,7 +863,7 @@ fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
             .or_insert_with(HashMap::new)
             .insert(request.prompt_id, request.rating)
     });
-    
+
     // Update prompt rating
     PROMPTS.with(|p| {
         let mut prompts = p.borrow_mut();
@@ -835,17 +871,19 @@ fn rate_prompt(request: RatePromptRequest) -> ApiResponse<String> {
             if previous_rating.is_none() {
                 // New rating
                 prompt.total_ratings += 1;
-                let total_score = prompt.rating * (prompt.total_ratings - 1) as f64 + request.rating as f64;
+                let total_score =
+                    prompt.rating * (prompt.total_ratings - 1) as f64 + request.rating as f64;
                 prompt.rating = safe_f64_average(total_score, prompt.total_ratings);
             } else {
                 // Update existing rating
                 let old_rating = previous_rating.unwrap() as f64;
-                let total_score = prompt.rating * prompt.total_ratings as f64 - old_rating + request.rating as f64;
+                let total_score = prompt.rating * prompt.total_ratings as f64 - old_rating
+                    + request.rating as f64;
                 prompt.rating = safe_f64_average(total_score, prompt.total_ratings);
             }
         }
     });
-    
+
     ApiResponse {
         success: true,
         data: Some("Prompt rated successfully".to_string()),
@@ -883,34 +921,118 @@ fn search_prompts(query: String, category: Option<PromptCategory>) -> ApiRespons
                 if !prompt.is_public {
                     return false;
                 }
-                
+
                 // Category filter
                 if let Some(ref cat) = category {
                     if prompt.category != *cat {
                         return false;
                     }
                 }
-                
+
                 // Text search in title, description, and tags
                 let query_lower = query.to_lowercase();
-                prompt.title.to_lowercase().contains(&query_lower) ||
-                prompt.description.to_lowercase().contains(&query_lower) ||
-                prompt.tags.iter().any(|tag| tag.to_lowercase().contains(&query_lower))
+                prompt.title.to_lowercase().contains(&query_lower)
+                    || prompt.description.to_lowercase().contains(&query_lower)
+                    || prompt
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query_lower))
             })
             .cloned()
             .collect();
-        
+
         // Sort by relevance (likes + purchases + rating)
         results.sort_by(|a, b| {
             let score_a = a.likes + a.purchases + (a.rating * 10.0) as u64;
             let score_b = b.likes + b.purchases + (b.rating * 10.0) as u64;
             score_b.cmp(&score_a)
         });
-        
+
         ApiResponse {
             success: true,
             data: Some(results),
             error: None,
+        }
+    })
+}
+
+#[ic_cdk::query]
+fn get_user_balance(user_id: UserId) -> ApiResponse<u64> {
+    USERS.with(|u| {
+        let users = u.borrow();
+        match users.get(&user_id) {
+            Some(user) => ApiResponse {
+                success: true,
+                data: Some(user.balance),
+                error: None,
+            },
+            None => ApiResponse {
+                success: false,
+                data: None,
+                error: Some("User not found".to_string()),
+            },
+        }
+    })
+}
+
+#[ic_cdk::update]
+async fn get_user_ledger_balance(user_id: UserId) -> ApiResponse<u64> {
+    // Ledger canister ID on mainnet
+    let ledger_canister_id = Principal::from_text("ryjl3-tyaaa-aaaaa-aaaba-cai").unwrap();
+
+    // Create account for the user
+    let account = Account {
+        owner: user_id,
+        subaccount: None,
+    };
+
+    // Call the ledger to get balance
+    match ic_cdk::call::<(Account,), (AccountBalance,)>(
+        ledger_canister_id,
+        "account_balance",
+        (account,),
+    )
+    .await
+    {
+        Ok((balance,)) => ApiResponse {
+            success: true,
+            data: Some(balance.e8s),
+            error: None,
+        },
+        Err(error) => ApiResponse {
+            success: false,
+            data: None,
+            error: Some(format!("Failed to get ledger balance: {:?}", error)),
+        },
+    }
+}
+
+#[ic_cdk::update]
+fn update_username(new_username: String) -> ApiResponse<User> {
+    let caller = get_caller();
+    if new_username.trim().is_empty() || new_username.len() > 50 {
+        return ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Username must be between 1 and 50 characters".to_string()),
+        };
+    }
+    USERS.with(|u| {
+        let mut users = u.borrow_mut();
+        match users.get_mut(&caller) {
+            Some(user) => {
+                user.username = Some(new_username.clone());
+                ApiResponse {
+                    success: true,
+                    data: Some(user.clone()),
+                    error: None,
+                }
+            }
+            None => ApiResponse {
+                success: false,
+                data: None,
+                error: Some("User not found".to_string()),
+            },
         }
     })
 }

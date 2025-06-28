@@ -14,11 +14,6 @@
       ],
       "type": "assets",
       "workspace": "PromptVault_frontend"
-    },
-    "internet_identity": {
-      "type": "custom",
-      "candid": "canisters/_ii_build/internet_identity.did",
-      "wasm": "canisters/_ii_build/internet_identity.wasm.gz"
     }
   },
   "defaults": {
